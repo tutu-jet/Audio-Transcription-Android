@@ -1,3 +1,0 @@
-com.collabora.whisperlive.android
-string app_name
-style Theme_WhisperLive
