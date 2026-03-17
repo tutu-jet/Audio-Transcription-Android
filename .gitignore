@@ -1,4 +1,76 @@
-.gradle
-.kotlin
-build
-app/build
+# Built application files
+*.apk
+*.aab
+*.ap_
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+
+# Gradle files
+.gradle/
+**/build/
+
+# Local configuration file (sdk path etc)
+local.properties
+
+# Log files
+*.log
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+
+# Keystore files
+*.jks
+*.keystore
+
+# External native build
+.externalNativeBuild/
+.cxx/
+
+# Google Services (有时包含敏感信息)
+google-services.json
+
+# Navigation Safe Args
+.navigation/
+
+# Kotlin/Compose 编译缓存
+.kotlinc/
+.kotlin/
+
+# kapt
+kapt/
+
+# Hilt / Dagger（可选）
+dagger/
+
+# Compose Preview 缓存（一般在 build 里，但保险）
+compose_compiler/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test results
+outputs/
+reports/
+
+# Firebase / Crashlytics（如果有）
+fabric.properties
+crashlytics.properties
+
+# NDK
+obj/
+
+# Editor backups
+*~
+*.swp
