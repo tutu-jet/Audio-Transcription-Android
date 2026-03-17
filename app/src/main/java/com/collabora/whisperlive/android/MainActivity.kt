@@ -42,9 +42,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -63,6 +65,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -154,13 +157,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-
 enum class ThemePreference {
     SYSTEM, LIGHT, DARK
 }
 
 data class TranscriptLine(
-    val speaker: Int? = null,
     val text: String = "",
     val translation: String? = null,
     val detectedLanguage: String? = null,
@@ -190,7 +191,11 @@ class AsrController(private val context: Context) {
 
     var statusText by mutableStateOf("点击开始转录")
     var websocketUrl by mutableStateOf(
-        prefs.getString("ws_url", "ws://nonincriminating-obesely-rosy.ngrok-free.dev/asr") ?: "ws://nonincriminating-obesely-rosy.ngrok-free.dev/asr")
+        prefs.getString(
+            "ws_url",
+            "ws://nonincriminating-obesely-rosy.ngrok-free.dev/asr"
+        ) ?: "ws://nonincriminating-obesely-rosy.ngrok-free.dev/asr"
+    )
     var chunkDurationMs by mutableStateOf(prefs.getInt("chunk_duration", 100))
     var settingsVisible by mutableStateOf(false)
     var serverUseAudioWorklet: Boolean? by mutableStateOf(null)
@@ -253,8 +258,10 @@ class AsrController(private val context: Context) {
                 .filter { it.isSource }
                 .map {
                     val label = buildString {
-                        append(it.productName?.toString()?.ifBlank { "输入设备 ${it.id}" }
-                            ?: "输入设备 ${it.id}")
+                        append(
+                            it.productName?.toString()?.ifBlank { "输入设备 ${it.id}" }
+                                ?: "输入设备 ${it.id}"
+                        )
                         append(" (id=${it.id})")
                     }
                     MicrophoneItem(it.id, label, it)
@@ -468,7 +475,11 @@ class AsrController(private val context: Context) {
                         var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
                         while (outputIndex >= 0) {
                             val outputBuffer = encoder.getOutputBuffer(outputIndex)
-                            if (outputBuffer != null && bufferInfo.size > 0) {
+                            if (
+                                outputBuffer != null &&
+                                bufferInfo.size > 0 &&
+                                (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                            ) {
                                 val aacRaw = ByteArray(bufferInfo.size)
                                 outputBuffer.position(bufferInfo.offset)
                                 outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
@@ -483,7 +494,6 @@ class AsrController(private val context: Context) {
                         }
                     }
 
-                    // 停止录音后，把编码器里残留的数据冲出来
                     val eosInputIndex = encoder.dequeueInputBuffer(10_000)
                     if (eosInputIndex >= 0) {
                         encoder.queueInputBuffer(
@@ -498,7 +508,11 @@ class AsrController(private val context: Context) {
                     var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10_000)
                     while (outputIndex >= 0) {
                         val outputBuffer = encoder.getOutputBuffer(outputIndex)
-                        if (outputBuffer != null && bufferInfo.size > 0) {
+                        if (
+                            outputBuffer != null &&
+                            bufferInfo.size > 0 &&
+                            (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                        ) {
                             val aacRaw = ByteArray(bufferInfo.size)
                             outputBuffer.position(bufferInfo.offset)
                             outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
@@ -588,7 +602,7 @@ class AsrController(private val context: Context) {
                 statusText = if (serverUseAudioWorklet == true) {
                     "已连接。服务端为 PCM 模式。"
                 } else {
-                    "已连接。服务端返回非 PCM 配置，但 Android 客户端仍使用 PCM。"
+                    "已连接。服务端返回非 PCM 配置。"
                 }
                 return
             }
@@ -609,10 +623,11 @@ class AsrController(private val context: Context) {
         }
 
         currentStatus = data.optString("status", "active_transcription")
-        remainingTimeTranscription = data.optDouble("remaining_time_transcription", 0.0).toFloat()
-        remainingTimeDiarization = data.optDouble("remaining_time_diarization", 0.0).toFloat()
+        remainingTimeTranscription =
+            data.optDouble("remaining_time_transcription", 0.0).toFloat()
+        remainingTimeDiarization = 0f
         bufferTranscription = data.optString("buffer_transcription", "")
-        bufferDiarization = data.optString("buffer_diarization", "")
+        bufferDiarization = ""
         bufferTranslation = data.optString("buffer_translation", "")
 
         val newLines = mutableListOf<TranscriptLine>()
@@ -620,11 +635,9 @@ class AsrController(private val context: Context) {
         for (i in 0 until arr.length()) {
             val item = arr.optJSONObject(i) ?: continue
             newLines += TranscriptLine(
-                speaker = if (item.has("speaker")) item.optInt("speaker") else null,
                 text = item.optString("text", ""),
                 translation = item.optString("translation", "").takeIf { it.isNotBlank() },
-                detectedLanguage = item.optString("detected_language", "")
-                    .takeIf { it.isNotBlank() },
+                detectedLanguage = item.optString("detected_language", "").takeIf { it.isNotBlank() },
                 start = item.opt("start")?.toString(),
                 end = item.opt("end")?.toString()
             )
@@ -656,22 +669,15 @@ class AsrController(private val context: Context) {
         val data = lastReceivedData ?: return
         currentStatus = data.optString("status", currentStatus)
         bufferTranscription = data.optString("buffer_transcription", "")
-        bufferDiarization = data.optString("buffer_diarization", "")
+        bufferDiarization = ""
         bufferTranslation = data.optString("buffer_translation", "")
 
         if (finalizing) {
-            if (bufferDiarization.isNotBlank() || bufferTranscription.isNotBlank() || bufferTranslation.isNotBlank()) {
+            if (bufferTranscription.isNotBlank() || bufferTranslation.isNotBlank()) {
                 if (transcriptLines.isEmpty()) {
                     transcriptLines.add(
                         TranscriptLine(
-                            speaker = 1,
-                            text = buildString {
-                                if (bufferDiarization.isNotBlank()) append(bufferDiarization.trim())
-                                if (bufferTranscription.isNotBlank()) {
-                                    if (isNotBlank()) append(" ")
-                                    append(bufferTranscription.trim())
-                                }
-                            },
+                            text = bufferTranscription.trim(),
                             translation = bufferTranslation.takeIf { it.isNotBlank() }
                         )
                     )
@@ -680,10 +686,6 @@ class AsrController(private val context: Context) {
                     transcriptLines[transcriptLines.lastIndex] = last.copy(
                         text = buildString {
                             append(last.text)
-                            if (bufferDiarization.isNotBlank()) {
-                                if (isNotBlank()) append(" ")
-                                append(bufferDiarization.trim())
-                            }
                             if (bufferTranscription.isNotBlank()) {
                                 if (isNotBlank()) append(" ")
                                 append(bufferTranscription.trim())
@@ -768,7 +770,6 @@ fun AsrScreen(
     hasRecordPermission: Boolean,
     onRequestPermission: () -> Unit
 ) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val chunkChoices = listOf(50, 100, 200, 500)
 
@@ -849,10 +850,8 @@ fun AsrScreen(
             TranscriptCard(
                 lines = controller.transcriptLines,
                 bufferTranscription = controller.bufferTranscription,
-                bufferDiarization = controller.bufferDiarization,
                 bufferTranslation = controller.bufferTranslation,
                 remainingTimeTranscription = controller.remainingTimeTranscription,
-                remainingTimeDiarization = controller.remainingTimeDiarization,
                 currentStatus = controller.currentStatus,
                 isFinalizing = controller.waitingForStop
             )
@@ -1138,83 +1137,118 @@ private fun RecordRow(
 private fun TranscriptCard(
     lines: List<TranscriptLine>,
     bufferTranscription: String,
-    bufferDiarization: String,
     bufferTranslation: String,
     remainingTimeTranscription: Float,
-    remainingTimeDiarization: Float,
     currentStatus: String,
     isFinalizing: Boolean
 ) {
+    val scrollState = rememberScrollState()
+
+    val mergedText = buildString {
+        lines.forEach { line ->
+            val t = line.text.trim()
+            if (t.isNotEmpty()) {
+                if (isNotEmpty()) append("\n")
+                append(t)
+            }
+        }
+
+        val buf = bufferTranscription.trim()
+        if (buf.isNotEmpty()) {
+            if (isNotEmpty()) append("\n")
+            append(buf)
+        }
+    }.trim()
+
+    val mergedTranslation = buildString {
+        lines.forEach { line ->
+            val t = line.translation?.trim().orEmpty()
+            if (t.isNotEmpty()) {
+                if (isNotEmpty()) append("\n")
+                append(t)
+            }
+        }
+
+        val buf = bufferTranslation.trim()
+        if (buf.isNotEmpty()) {
+            if (isNotEmpty()) append("\n")
+            append(buf)
+        }
+    }.trim()
+
+    LaunchedEffect(mergedText, mergedTranslation) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
     Card(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        ),
         modifier = Modifier
             .fillMaxWidth()
     ) {
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)) {
+                .padding(16.dp)
+        ) {
             Text("转写结果", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
 
             if (currentStatus == "no_audio_detected") {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("没有检测到音频...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "没有检测到音频...",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 return@Column
             }
 
-            val effectiveLines =
-                if (lines.isEmpty() && (bufferTranscription.isNotBlank() || bufferDiarization.isNotBlank())) {
-                    listOf(TranscriptLine(speaker = 1))
-                } else {
-                    lines
-                }
+            if (!isFinalizing) {
+                AssistChipText("转写延迟 ${fmt1(remainingTimeTranscription)}s")
+                Spacer(Modifier.height(12.dp))
+            }
 
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                modifier = Modifier.fillMaxSize()
             ) {
-                itemsIndexed(effectiveLines) { index, line ->
-                    val isLast = index == effectiveLines.lastIndex
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(12.dp)
+                ) {
+                    if (mergedText.isNotBlank()) {
+                        Text(
+                            text = mergedText,
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    } else {
+                        Text(
+                            text = "正在等待语音输入...",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
-                    val lineText = buildString {
-                        append(line.text)
+                    if (mergedTranslation.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "翻译：\n$mergedTranslation",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
 
-                        if (isLast && bufferDiarization.isNotBlank()) {
-                            if (isFinalizing) {
-                                if (isNotBlank()) append(" ")
-                                append(bufferDiarization.trim())
-                            } else {
-                                append(bufferDiarization)
-                            }
-                        }
-
-                        if (isLast && bufferTranscription.isNotBlank()) {
-                            if (isFinalizing) {
-                                if (isNotBlank()) append(" ")
-                                append(bufferTranscription.trim())
-                            } else {
-                                append(bufferTranscription)
-                            }
-                        }
-                    }.trim()
-
-                    val translationText = buildString {
-                        if (!line.translation.isNullOrBlank()) append(line.translation)
-                        if (isLast && bufferTranslation.isNotBlank()) append(bufferTranslation)
-                    }.trim()
-
-                    TranscriptLineCard(
-                        line = line,
-                        lineText = lineText,
-                        translationText = translationText,
-                        isLast = isLast,
-                        isFinalizing = isFinalizing,
-                        remainingTimeTranscription = remainingTimeTranscription,
-                        remainingTimeDiarization = remainingTimeDiarization
-                    )
+                    Spacer(Modifier.height(4.dp))
                 }
             }
         }
@@ -1228,8 +1262,7 @@ private fun TranscriptLineCard(
     translationText: String,
     isLast: Boolean,
     isFinalizing: Boolean,
-    remainingTimeTranscription: Float,
-    remainingTimeDiarization: Float
+    remainingTimeTranscription: Float
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -1238,26 +1271,33 @@ private fun TranscriptLineCard(
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(12.dp)) {
+                .padding(12.dp)
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SpeakerChip(line)
-
                 if (line.detectedLanguage != null) {
                     AssistChipText("语言: ${line.detectedLanguage}")
                 }
 
-                if (isLast && !isFinalizing && line.speaker != -2) {
+                if (isLast && !isFinalizing) {
                     AssistChipText("转写延迟 ${fmt1(remainingTimeTranscription)}s")
-                    if (remainingTimeDiarization > 0f) {
-                        AssistChipText("分离延迟 ${fmt1(remainingTimeDiarization)}s")
+                }
+
+                val timeText = buildString {
+                    if (!line.start.isNullOrBlank() || !line.end.isNullOrBlank()) {
+                        append(line.start ?: "")
+                        append(" - ")
+                        append(line.end ?: "")
                     }
+                }
+                if (timeText.isNotBlank()) {
+                    AssistChipText(timeText)
                 }
             }
 
-            if (!lineText.isBlank()) {
+            if (lineText.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     text = lineText,
@@ -1275,27 +1315,6 @@ private fun TranscriptLineCard(
             }
         }
     }
-}
-
-@Composable
-private fun SpeakerChip(line: TranscriptLine) {
-    val label = when (line.speaker) {
-        -2 -> "静音"
-        0 -> "处理中"
-        null -> "未标注"
-        else -> "说话人 ${line.speaker}"
-    }
-
-    val timeText = buildString {
-        if (!line.start.isNullOrBlank() || !line.end.isNullOrBlank()) {
-            append(" ")
-            append(line.start ?: "")
-            append(" - ")
-            append(line.end ?: "")
-        }
-    }
-
-    AssistChipText(label + timeText)
 }
 
 @Composable
@@ -1340,7 +1359,7 @@ fun AppTheme(
 
 private fun addAdtsHeader(aacData: ByteArray, sampleRate: Int, channelCount: Int): ByteArray {
     val packetLength = aacData.size + 7
-    val profile = 2 // AAC LC
+    val profile = 2
     val freqIdx = getAacSampleRateIndex(sampleRate)
     val chanCfg = channelCount
 
@@ -1376,7 +1395,6 @@ private fun getAacSampleRateIndex(sampleRate: Int): Int {
         else -> 8
     }
 }
-
 
 private fun createAacEncoder(sampleRate: Int = 16000, channelCount: Int = 1): MediaCodec {
     val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
